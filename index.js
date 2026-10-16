@@ -188,7 +188,7 @@ const defaultCustomerArea =
   String(process.env.DEFAULT_CUSTOMER_AREA || '').trim() || 'Shop';
 
 // TEMPORARY: fetch customer data without writing it to Supabase.
-const CUSTOMER_SYNC_PREVIEW_ONLY = true;
+const CUSTOMER_SYNC_PREVIEW_ONLY = false;
 
 const syncCustomersToOrderFlowEnabled =
   String(
@@ -1622,19 +1622,39 @@ function getSelectedSellingPrice(
   names
 ) {
   if (method === 'standard') {
-    return getLatestApplicableSellingRate(itemXml);
+    const standardPrice =
+      getLatestApplicableSellingRate(itemXml);
+
+    return standardPrice ?? getOpeningRate(itemXml);
   }
 
   if (method === 'opening') {
-    return getOpeningRate(itemXml);
+    const openingPrice = getOpeningRate(itemXml);
+
+    return openingPrice ?? getLatestApplicableSellingRate(itemXml);
   }
 
   if (method === 'price_levels') {
+    const fallbackPrice =
+      getLatestApplicableSellingRate(itemXml) ??
+      getOpeningRate(itemXml);
+
+    const getConfiguredLevelPrice = (levelName) => {
+      if (!normalizeProductName(levelName)) {
+        return null;
+      }
+
+      return (
+        getLatestPriceLevelRate(itemXml, levelName) ??
+        fallbackPrice
+      );
+    };
+
     return {
-      highest: getLatestPriceLevelRate(itemXml, names.highest),
-      medium: getLatestPriceLevelRate(itemXml, names.medium),
-      lowest: getLatestPriceLevelRate(itemXml, names.lowest),
-      special: getLatestPriceLevelRate(itemXml, names.special)
+      highest: getConfiguredLevelPrice(names.highest),
+      medium: getConfiguredLevelPrice(names.medium),
+      lowest: getConfiguredLevelPrice(names.lowest),
+      special: getConfiguredLevelPrice(names.special)
     };
   }
 
@@ -2797,12 +2817,12 @@ async function fetchCustomersFromTally() {
     const amount = Number(match[0]);
 
     if (/\bCR\b/i.test(raw)) {
-      return -Math.abs(amount);
-    }
+  return Math.abs(amount);
+}
 
-    if (/\bDR\b/i.test(raw)) {
-      return Math.abs(amount);
-    }
+if (/\bDR\b/i.test(raw)) {
+  return -Math.abs(amount);
+}
 
     return amount;
   }

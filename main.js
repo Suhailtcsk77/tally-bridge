@@ -1357,10 +1357,10 @@ ipcMain.handle(
             : 0;
 
           if (/\bCR\b/i.test(rawBalance)) {
-            balance = -Math.abs(balance);
-          } else if (/\bDR\b/i.test(rawBalance)) {
-            balance = Math.abs(balance);
-          }
+  balance = Math.abs(balance);
+} else if (/\bDR\b/i.test(rawBalance)) {
+  balance = -Math.abs(balance);
+}
 
           const usablePrice =
             rawPriceLevel || fallbackPrice || 'Price';
