@@ -973,51 +973,123 @@ async function postToTally(xml, timeout = 30000) {
 
 
 
-async function writeProductThroughEdgeFunction(
-  product,
-  existingId
-) {
-  if (existingId !== null && existingId !== undefined) {
-    product.updated_at = getIndiaLocalTimestamp();
-  }
 
-  const functionUrl =
-    `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/tally-bridge-products`;
+async function writeProductThroughEdgeFunction(product, existingId) {
+  const productName =
+    product.product_name ||
+    product.name ||
+    '(name unavailable)';
 
-  const response = await axios.post(
-    functionUrl,
-    {
-      bridge_secret: bridgeSecret,
-      product,
-      existing_id: existingId ?? null
-    },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`
-      },
-      timeout: 30000
+  try {
+    if (existingId !== null && existingId !== undefined) {
+      product.updated_at = getIndiaLocalTimestamp();
     }
-  );
 
-  if (
-    !response.data ||
-    response.data.success !== true ||
-    !response.data.product ||
-    !['inserted', 'updated'].includes(response.data.action)
-  ) {
+    const functionUrl =
+      `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/tally-bridge-products`;
+
+    const response = await axios.post(
+      functionUrl,
+      {
+        bridge_secret: bridgeSecret,
+        product,
+        existing_id: existingId ?? null
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`
+        },
+        timeout: 30000
+      }
+    );
+
+    if (
+      !response.data ||
+      response.data.success !== true ||
+      !response.data.product ||
+      !['inserted', 'updated'].includes(response.data.action)
+    ) {
+      throw new Error(
+        response.data?.error ||
+        'The server returned an invalid product-sync response.'
+      );
+    }
+
+    return {
+      action: response.data.action,
+      product: response.data.product
+    };
+
+  } catch (error) {
+    const status = error.response?.status ?? null;
+    const code = error.code || 'UNKNOWN';
+
+    let diagnosis;
+
+    if (status === 401 || status === 403) {
+      diagnosis =
+        'Authentication or permission failure. ' +
+        'Check bridge activation and server permissions.';
+    } else if (status === 400 || status === 422) {
+      diagnosis =
+        'The server rejected the product data. ' +
+        'Check required fields and database validation.';
+    } else if (status === 404) {
+      diagnosis =
+        'The Edge Function endpoint was not found. ' +
+        'Check the Supabase URL and deployed function.';
+    } else if (status === 429) {
+      diagnosis =
+        'Too many requests. Wait before retrying.';
+    } else if (status !== null && status >= 500) {
+      diagnosis =
+        'Supabase server error. Check the Edge Function logs.';
+    } else if (
+      ['ECONNABORTED', 'ETIMEDOUT'].includes(code)
+    ) {
+      diagnosis =
+        'The request timed out. Check the network and Supabase response.';
+    } else if (
+      ['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET'].includes(code)
+    ) {
+      diagnosis =
+        'Could not reach Supabase. Check internet access and endpoint settings.';
+    } else {
+      diagnosis =
+        'Unexpected product-write failure. Inspect the error message and code.';
+    }
+
+    const serverMessage =
+      error.response?.data?.error ||
+      error.response?.data?.message ||
+      error.message ||
+      'Unknown error';
+
+    const details = {
+      timestamp: new Date().toISOString(),
+      stage: 'Supabase product write',
+      productName: String(productName).slice(0, 150),
+      existingId: existingId ?? null,
+      errorCode: code,
+      httpStatus: status,
+      diagnosis,
+      message: String(serverMessage).slice(0, 1000)
+    };
+
+    console.error(
+      '[DIAGNOSTIC ERROR] ' + JSON.stringify(details)
+    );
+
     throw new Error(
-      response.data?.error ||
-      'Product sync failed or the Edge Function returned an invalid result.'
+      `Supabase product write failed: ${diagnosis} ` +
+      `Status: ${status ?? 'not received'}. ` +
+      `Code: ${code}. Details: ${String(serverMessage).slice(0, 300)}`
     );
   }
-
-  return {
-    action: response.data.action,
-    product: response.data.product
-  };
 }
+
 
 // =================================
 // LOAD JSON CACHE
