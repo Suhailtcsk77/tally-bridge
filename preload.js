@@ -22,14 +22,34 @@ contextBridge.exposeInMainWorld(
 
 
     // Save Tally Setup
+    
+    // Save Tally Setup
     saveSetup: (
       setupData
     ) =>
-
       ipcRenderer.invoke(
         'save-tally-setup',
         setupData
+      ),
+
+    // Preview 10 products from Tally
+    previewProducts: (
+      previewData
+    ) =>
+      ipcRenderer.invoke(
+        'preview-tally-products',
+        previewData
+      ),
+
+    // Preview 10 customers from Tally
+    previewCustomers: (
+      previewData
+    ) =>
+      ipcRenderer.invoke(
+        'preview-tally-customers',
+        previewData
       )
+
 
   }
 

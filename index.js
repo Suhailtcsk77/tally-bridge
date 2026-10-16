@@ -124,6 +124,12 @@ const envPath =
 
   );
 
+const customerSyncStateFile =
+  path.join(
+    appDataDirectory,
+    'customer_sync_state.json'
+  );
+
 
 // =================================
 // LOAD ENVIRONMENT
@@ -174,6 +180,20 @@ const bridgeSecret =
 
 const tallyCompanyId =
   String(process.env.TALLY_COMPANY_ID || '').trim();
+
+const defaultProductUnit =
+  String(process.env.DEFAULT_PRODUCT_UNIT || '').trim() || 'Nos';
+
+const defaultCustomerArea =
+  String(process.env.DEFAULT_CUSTOMER_AREA || '').trim() || 'Shop';
+
+// TEMPORARY: fetch customer data without writing it to Supabase.
+const CUSTOMER_SYNC_PREVIEW_ONLY = true;
+
+const syncCustomersToOrderFlowEnabled =
+  String(
+    process.env.SYNC_CUSTOMERS_TO_ORDER_FLOW || ''
+  ).trim().toLowerCase() === 'true';
 
 
 const supabaseAnonKey =
@@ -1622,12 +1642,32 @@ function getSelectedSellingPrice(
 }
 
 function removeTallyDefaultValues(product) {
-  const defaultTextValues = {
-    category: ['primary'],
-    brand: ['not applicable'],
-    alternative_unit: ['not applicable'],
-    pachaging_unit: ['not applicable']
-  };
+  const commonTallyDefaults = [
+  'not applicable',
+  'not set',
+  'none',
+  'nil',
+  'default',
+  'not defined',
+  'not available'
+];
+
+const defaultTextValues = {
+  category: [
+    'primary',
+    ...commonTallyDefaults
+  ],
+
+  brand: commonTallyDefaults,
+
+  product_code: commonTallyDefaults,
+
+  details: commonTallyDefaults,
+
+  alternative_unit: commonTallyDefaults,
+
+  pachaging_unit: commonTallyDefaults
+};
 
   for (const [field, defaults] of Object.entries(
     defaultTextValues
@@ -2337,7 +2377,22 @@ const product = {
   brand: getTagValue(itemXml, 'CATEGORY') || null,
 
   // Tally "Units" -> Supabase unit
-  unit: getTagValue(itemXml, 'BASEUNITS') || null,
+  unit: (() => {
+  const rawUnit = String(
+    getTagValue(itemXml, 'BASEUNITS') || ''
+  )
+    .replace(/^[\u0000-\u001F\u007F]+/, '')
+    .trim();
+
+  if (
+    !rawUnit ||
+    /^(not applicable|not set|none|nil|default)$/i.test(rawUnit)
+  ) {
+    return defaultProductUnit;
+  }
+
+  return rawUnit;
+})(),
 
   // Tally "Alternate units" -> Supabase alternative_unit
   alternative_unit:
@@ -2523,6 +2578,55 @@ const companyCache =
     ? previousCompanyCache
     : {};
 
+
+const initialProductImportEnabled =
+  String(
+    process.env.SYNC_PRODUCTS_TO_ORDER_FLOW || ''
+  ).trim().toLowerCase() === 'true';
+
+const hasExistingProductCache =
+  Object.keys(companyCache).some(
+    key => key !== '__initialBaselineComplete'
+  );
+
+// If initial product import is disabled and this company
+// has no existing product cache, record a local baseline.
+// Do not upload the existing products to Supabase.
+if (
+  companyCache.__initialBaselineComplete !== true &&
+  !initialProductImportEnabled &&
+  !hasExistingProductCache
+) {
+  for (const item of products) {
+    companyCache[item.product_key] = item.fingerprint;
+  }
+
+  companyCache.__initialBaselineComplete = true;
+
+  cacheRoot.productSyncByCompany[tallyCompanyId] =
+    companyCache;
+
+  if (!saveJsonFile(stockCacheFile, cacheRoot)) {
+    throw new Error(
+      'Could not save the initial product baseline.'
+    );
+  }
+
+  console.log(
+    '[PRODUCT SYNC] Initial import disabled. ' +
+    `Saved local baseline for ${products.length} products; ` +
+    'nothing uploaded to Supabase.'
+  );
+
+  return {
+    inserted: 0,
+    updated: 0,
+    unchanged: products.length,
+    baselineOnly: true
+  };
+}
+
+
 let inserted = 0;
 let updated = 0;
 let unchanged = 0;
@@ -2582,6 +2686,8 @@ if (saveResult.action === 'inserted') {
   companyCache[productKey] = fingerprint;
 }
 
+companyCache.__initialBaselineComplete = true;
+
 
   cacheRoot.productSyncByCompany[tallyCompanyId] = companyCache;
 
@@ -2600,6 +2706,406 @@ if (saveResult.action === 'inserted') {
   return { inserted, updated, unchanged };
 }
 
+
+async function fetchCustomersFromTally() {
+  const cleanCustomerText = (value) => {
+  const cleaned = String(value ?? '')
+    .replace(/^[\u0000-\u001F\u007F]+/, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  const defaultValues = [
+    'not applicable',
+    'not set',
+    'none',
+    'nil',
+    'default',
+    'not defined',
+    'not available'
+  ];
+
+  if (
+    !cleaned ||
+    defaultValues.includes(cleaned.toLowerCase())
+  ) {
+    return '';
+  }
+
+  return cleaned;
+};
+  console.log('[CUSTOMER SYNC] Fetching customers from Tally...');
+
+  const xml = `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>EXPORT</TALLYREQUEST>
+    <TYPE>COLLECTION</TYPE>
+    <ID>TallyBridgeCustomers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="TallyBridgeCustomers">
+            <TYPE>Ledger</TYPE>
+            <CHILDOF>$$GroupSundryDebtors</CHILDOF>
+            <BELONGSTO>Yes</BELONGSTO>
+            <FETCH>Name</FETCH>
+            <FETCH>Parent</FETCH>
+            <FETCH>Address.List</FETCH>
+            <FETCH>LedgerMobile</FETCH>
+            <FETCH>LedgerPhone</FETCH>
+            <FETCH>PhoneNumber</FETCH>
+            <FETCH>MobileNumber</FETCH>
+            <FETCH>ClosingBalance</FETCH>
+            <FETCH>PriceLevelApplicable</FETCH>
+            <FETCH>PriceLevel</FETCH>
+            <FETCH>PriceLevel.List</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+
+  const response = await postToTally(xml);
+
+  if (!response || !response.success || !response.data) {
+    throw new Error('Tally did not return customer details.');
+  }
+
+  const responseXml = String(response.data);
+  const tallyError = getTagValue(responseXml, 'LINEERROR');
+
+  if (tallyError) {
+    throw new Error('Tally customer fetch error: ' + tallyError);
+  }
+
+  function parseCustomerBalance(value) {
+    const raw = String(value || '').trim();
+
+    const match = raw
+      .replace(/,/g, '')
+      .match(/-?\d+(?:\.\d+)?/);
+
+    if (!match) return 0;
+
+    const amount = Number(match[0]);
+
+    if (/\bCR\b/i.test(raw)) {
+      return -Math.abs(amount);
+    }
+
+    if (/\bDR\b/i.test(raw)) {
+      return Math.abs(amount);
+    }
+
+    return amount;
+  }
+
+  const customers = [];
+  const ledgerRegex =
+    /<LEDGER(?=[\s>])[^>]*>[\s\S]*?<\/LEDGER>/gi;
+
+  let match;
+
+  while ((match = ledgerRegex.exec(responseXml)) !== null) {
+    const itemXml = match[0];
+
+    const ledgerStart =
+      itemXml.match(/<LEDGER(?=[\s>])[^>]*>/i)?.[0] || '';
+
+    const nameAttribute =
+      ledgerStart.match(/\bNAME="([^"]*)"/i);
+
+    const customerName = cleanCustomerText(
+  decodeXml(
+    nameAttribute
+      ? nameAttribute[1]
+      : getTagValue(itemXml, 'NAME') || ''
+  )
+);
+
+    if (!customerName) continue;
+
+    const addressBlock =
+      itemXml.match(
+        /<ADDRESS\.LIST\b[^>]*>([\s\S]*?)<\/ADDRESS\.LIST>/i
+      )?.[1] || '';
+
+    const addressParts = [
+      ...addressBlock.matchAll(
+        /<ADDRESS(?![\w.])[^>]*>([\s\S]*?)<\/ADDRESS>/gi
+      )
+    ]
+      .map(address =>
+        decodeXml(
+          address[1].replace(/<[^>]+>/g, ' ').trim()
+        )
+      )
+      .filter(Boolean);
+
+    const place = addressParts.join(', ');
+
+    const mobile = [
+  getTagValue(itemXml, 'LEDGERMOBILE'),
+  getTagValue(itemXml, 'MOBILENUMBER'),
+  getTagValue(itemXml, 'LEDGERPHONE'),
+  getTagValue(itemXml, 'PHONENUMBER')
+]
+  .map(cleanCustomerText)
+  .find(Boolean) || '';
+
+    const balance = parseCustomerBalance(
+      getTagValue(itemXml, 'CLOSINGBALANCE')
+    );
+
+    
+const parentGroup = cleanCustomerText(
+  getTagValue(itemXml, 'PARENT')
+);
+
+const usablePriceLevel = [
+  getTagValue(itemXml, 'PRICELEVELAPPLICABLE'),
+  getTagValue(itemXml, 'PRICELEVEL'),
+  getTagValue(itemXml, 'PRICELEVEL.LIST')
+]
+  .map(cleanCustomerText)
+  .find(value =>
+    value &&
+    !/^(not applicable|not set|none|nil|default)$/i.test(value)
+  );
+
+const fallbackPrice = cleanCustomerText(
+  process.env.PRICE_LEVEL_HIGHEST || ''
+);
+
+const customerPrice =
+  usablePriceLevel ||
+  fallbackPrice ||
+  'Price';
+
+
+const customerBeat =
+  !parentGroup ||
+  /^sundry debtors$/i.test(parentGroup) ||
+  /^(not applicable|not set|none|nil|default|not defined|not available)$/i.test(parentGroup)
+    ? defaultCustomerArea
+    : parentGroup;
+
+
+customers.push({
+  customer_name: customerName,
+  place: place || null,
+  mobile: mobile || null,
+  balance,
+  price: customerPrice,
+  beat: customerBeat
+});
+
+  }
+
+  if (customers.length === 0) {
+    throw new Error(
+      'No customer ledgers were returned from Tally. ' +
+      'Check that customers are under Sundry Debtors.'
+    );
+  }
+
+  console.log(
+    `[CUSTOMER SYNC] Fetched ${customers.length} customer ledgers from Tally.`
+  );
+
+  return customers;
+}
+
+
+async function writeCustomersThroughEdgeFunction(customers) {
+  if (!supabaseUrl || !supabaseKey || !bridgeSecret) {
+    throw new Error(
+      'Supabase URL, API key, or bridge secret is missing.'
+    );
+  }
+
+  if (!Array.isArray(customers) || customers.length === 0) {
+    throw new Error(
+      'No customer records are available to upload.'
+    );
+  }
+
+  const functionUrl =
+    `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/tally-bridge-customers`;
+
+  console.log(
+    `[CUSTOMER SYNC] Sending ${customers.length} customers to Supabase...`
+  );
+
+  try {
+    const response = await axios.post(
+      functionUrl,
+      {
+        bridge_secret: bridgeSecret,
+        customers
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`
+        },
+        timeout: 60000
+      }
+    );
+
+    if (!response.data || response.data.success !== true) {
+      throw new Error(
+        response.data?.error ||
+        'Supabase did not confirm the customer import.'
+      );
+    }
+
+    console.log(
+      `[CUSTOMER SYNC] Import successful. ` +
+      `Customers inserted: ${response.data.inserted}.`
+    );
+
+    return {
+      success: true,
+      inserted: response.data.inserted,
+      companyId: response.data.company_id
+    };
+
+  } catch (error) {
+    const status = error.response?.status || null;
+
+    const serverMessage =
+      error.response?.data?.error ||
+      error.message ||
+      'Unknown error';
+
+    console.error(
+      '[CUSTOMER SYNC ERROR]',
+      JSON.stringify({
+        stage: 'Supabase customer import',
+        status,
+        message: serverMessage
+      })
+    );
+
+    throw new Error(
+      `Customer import failed${status ? ` (HTTP ${status})` : ''}: ` +
+      serverMessage
+    );
+  }
+}
+
+
+async function syncCustomersToSupabaseOnce() {
+  if (!syncCustomersToOrderFlowEnabled) {
+    console.log(
+      '[CUSTOMER SYNC] Skipped: checkbox is unchecked.'
+    );
+
+    return {
+      success: true,
+      skipped: true,
+      inserted: 0
+    };
+  }
+
+  if (!tallyCompanyId) {
+    throw new Error(
+      'Company ID is missing from the bridge configuration.'
+    );
+  }
+
+  const state = loadJsonFile(customerSyncStateFile) || {};
+
+  if (state[tallyCompanyId]?.completed === true) {
+    console.log(
+      '[CUSTOMER SYNC] Already completed for this company. Skipping.'
+    );
+
+    return {
+      success: true,
+      skipped: true,
+      alreadyCompleted: true,
+      inserted: 0
+    };
+  }
+
+  console.log(
+    '[CUSTOMER SYNC] Starting the initial customer import.'
+  );
+
+  const customers = await fetchCustomersFromTally();
+
+  
+if (CUSTOMER_SYNC_PREVIEW_ONLY) {
+  console.log(
+    '[CUSTOMER SYNC PREVIEW] Customers fetched:',
+    customers.length
+  );
+
+  console.log(
+    '[CUSTOMER SYNC PREVIEW] First 10 customer mappings:'
+  );
+
+  console.log(
+    JSON.stringify(
+      customers.slice(0, 10).map(customer => ({
+        customer_name: customer.customer_name,
+        price: customer.price,
+        beat: customer.beat,
+        balance: customer.balance
+      })),
+      null,
+      2
+    )
+  );
+
+  return {
+    success: true,
+    previewOnly: true,
+    fetched: customers.length,
+    inserted: 0
+  };
+}
+
+
+  const result =
+    await writeCustomersThroughEdgeFunction(customers);
+
+  state[tallyCompanyId] = {
+    completed: true,
+    completedAt: new Date().toISOString(),
+    importedCount: result.inserted || 0
+  };
+
+  if (!saveJsonFile(customerSyncStateFile, state)) {
+    throw new Error(
+      'Customers were processed, but the completion record could not be saved.'
+    );
+  }
+
+  console.log(
+    '[CUSTOMER SYNC] Initial import completed. ' +
+    `Inserted: ${result.inserted || 0}.`
+  );
+
+  return {
+    success: true,
+    inserted: result.inserted || 0
+  };
+}
+
+
+
+
 // ========================================
 // RECEIVE MANUAL PRODUCT-SYNC COMMAND
 // ========================================
@@ -2615,6 +3121,16 @@ function sendProductSyncResult(result) {
     '\n'
   );
 }
+
+
+function sendCustomerSyncResult(result) {
+  process.stdout.write(
+    'CUSTOMER_SYNC_RESULT:' +
+    JSON.stringify(result) +
+    '\n'
+  );
+}
+
 
 // Log unexpected errors in the Tally Bridge process.
 process.on('uncaughtException', (error) => {
@@ -2675,6 +3191,31 @@ process.stdin.on('data', chunk => {
 
   continue;
 }
+
+
+if (command.command === 'sync-customers-once') {
+  syncCustomersToSupabaseOnce()
+    .then(result => {
+      sendCustomerSyncResult({
+        success: true,
+        ...result
+      });
+    })
+    .catch(error => {
+      console.error(
+        '[CUSTOMER SYNC ERROR]',
+        error.message
+      );
+
+      sendCustomerSyncResult({
+        success: false,
+        error: error.message
+      });
+    });
+
+  continue;
+}
+
 
 if (command.command !== 'sync-products') continue;
 
@@ -2746,6 +3287,39 @@ setInterval(async () => {
     productSyncInProgress = false;
   }
 }, PRODUCT_SYNC_INTERVAL_MS);
+
+
+ // Record the initial product baseline immediately when
+ // initial product import is disabled.
+const initialProductImportEnabled =
+  String(
+    process.env.SYNC_PRODUCTS_TO_ORDER_FLOW || ''
+  ).trim().toLowerCase() === 'true';
+
+if (!initialProductImportEnabled) {
+  (async () => {
+    if (productSyncInProgress) return;
+
+    productSyncInProgress = true;
+
+    try {
+      const result = await syncProductsToSupabase();
+
+      console.log(
+        '[PRODUCT BASELINE] Startup check completed.',
+        JSON.stringify(result)
+      );
+    } catch (error) {
+      console.error(
+        '[PRODUCT BASELINE ERROR]',
+        error.message
+      );
+    } finally {
+      productSyncInProgress = false;
+    }
+  })();
+}
+
 
 
 

@@ -39,6 +39,9 @@ let bridgeProcess = null;
 let productSyncRunning = false;
 let productSyncEnabled = true;
 let syncProductsAfterSetup = false;
+
+let syncCustomersAfterSetup = false;
+let customerSyncRunning = false;
 let bridgeStdoutBuffer = '';
 
 let activationWindow = null;
@@ -975,6 +978,437 @@ saveBridgeSecret(
 
 );
 
+
+function escapeTallyPreviewXml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function decodeTallyPreviewXml(value) {
+  return String(value ?? '')
+    .replace(/&amp;/g, '&')
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
+function cleanTallyPreviewText(value) {
+  const cleaned = String(value ?? '')
+    .replace(/^[\u0000-\u001F\u007F]+/, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  const defaults = [
+    'not applicable',
+    'not set',
+    'none',
+    'nil',
+    'default',
+    'not defined',
+    'not available'
+  ];
+
+  if (
+    !cleaned ||
+    defaults.includes(cleaned.toLowerCase())
+  ) {
+    return '';
+  }
+
+  return cleaned;
+}
+
+function getTallyPreviewTag(xml, tagName) {
+  const regex = new RegExp(
+    '<' + tagName +
+    '(?![\\w.])(?:\\s[^>]*)?>' +
+    '([\\s\\S]*?)' +
+    '<\\/' + tagName +
+    '(?![\\w.])\\s*>',
+    'i'
+  );
+
+  const match = String(xml ?? '').match(regex);
+
+  if (!match) return '';
+
+  return decodeTallyPreviewXml(
+    match[1].replace(/<[^>]+>/g, ' ').trim()
+  );
+}
+
+function getTallyPreviewRows(xml, itemTag) {
+  const regex = new RegExp(
+    '<' + itemTag + '(?=[\\s>])[^>]*>' +
+    '[\\s\\S]*?<\\/' + itemTag + '>',
+    'gi'
+  );
+
+  return String(xml ?? '').match(regex) || [];
+}
+
+function getTallyPreviewName(itemXml, itemTag) {
+  const startTag = itemXml.match(
+    new RegExp(
+      '<' + itemTag + '(?=[\\s>])[^>]*>',
+      'i'
+    )
+  )?.[0] || '';
+
+  const attribute = startTag.match(/\bNAME="([^"]*)"/i);
+
+  return decodeTallyPreviewXml(
+    attribute
+      ? attribute[1]
+      : getTallyPreviewTag(itemXml, 'NAME')
+  );
+}
+
+async function requestTallyPreview(xml) {
+  const response = await fetch(
+    'http://127.0.0.1:9000',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/xml'
+      },
+      body: xml,
+      signal: AbortSignal.timeout(30000)
+    }
+  );
+
+  const responseXml = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Tally returned HTTP ${response.status}.`
+    );
+  }
+
+  const tallyError = getTallyPreviewTag(
+    responseXml,
+    'LINEERROR'
+  );
+
+  if (tallyError) {
+    throw new Error('Tally error: ' + tallyError);
+  }
+
+  return responseXml;
+}
+
+// ========================================
+// PREVIEW 10 PRODUCTS
+// ========================================
+
+ipcMain.handle(
+  'preview-tally-products',
+  async (event, previewData = {}) => {
+    try {
+      const companyName = String(
+        previewData.companyName || ''
+      ).trim();
+
+      const fallbackUnit =
+  String(previewData.defaultProductUnit || '').trim() || 'Nos';
+
+      if (!companyName) {
+        return {
+          success: false,
+          error: 'Enter the Tally company name first.'
+        };
+      }
+
+      const xml = `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>EXPORT</TALLYREQUEST>
+    <TYPE>COLLECTION</TYPE>
+    <ID>TallyBridgePreviewStockItems</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${escapeTallyPreviewXml(companyName)}</SVCURRENTCOMPANY>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="TallyBridgePreviewStockItems">
+            <TYPE>StockItem</TYPE>
+            <FETCH>Name</FETCH>
+            <FETCH>Parent</FETCH>
+            <FETCH>BaseUnits</FETCH>
+            <FETCH>PartNo</FETCH>
+            <FETCH>Category</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+
+      const responseXml =
+        await requestTallyPreview(xml);
+
+      const items = getTallyPreviewRows(
+        responseXml,
+        'STOCKITEM'
+      );
+
+      const rows = items
+        .map(itemXml => ({
+          product_name:
+            getTallyPreviewName(itemXml, 'STOCKITEM'),
+          category:
+  cleanTallyPreviewText(
+    getTallyPreviewTag(itemXml, 'PARENT')
+  ),
+          unit: (() => {
+  const rawUnit = String(
+    getTallyPreviewTag(itemXml, 'BASEUNITS') || ''
+  )
+    .replace(/^[\u0000-\u001F\u007F]+/, '')
+    .trim();
+
+  if (
+    !rawUnit ||
+    /^(not applicable|not set|none|nil|default)$/i.test(rawUnit)
+  ) {
+    return fallbackUnit;
+  }
+
+  return rawUnit;
+})(),
+          product_code:
+  cleanTallyPreviewText(
+    getTallyPreviewTag(itemXml, 'PARTNO')
+  )
+        }))
+        .filter(row => row.product_name)
+        .slice(0, 10);
+
+      console.log(
+        `[PREVIEW] Returning ${rows.length} product rows.`
+      );
+
+      return {
+        success: true,
+        rows,
+        shown: rows.length
+      };
+
+    } catch (error) {
+      console.error(
+        '[PRODUCT PREVIEW ERROR]',
+        error.message
+      );
+
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+);
+
+// ========================================
+// PREVIEW 10 CUSTOMERS
+// ========================================
+
+ipcMain.handle(
+  'preview-tally-customers',
+  async (event, previewData = {}) => {
+    try {
+      const companyName = String(
+        previewData.companyName || ''
+      ).trim();
+
+      if (!companyName) {
+        return {
+          success: false,
+          error: 'Enter the Tally company name first.'
+        };
+      }
+
+      const fallbackPrice = String(
+        previewData.highestPriceLevel || ''
+      ).trim();
+
+      const fallbackArea =
+  String(previewData.defaultCustomerArea || '').trim() || 'Shop';
+
+      const xml = `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>EXPORT</TALLYREQUEST>
+    <TYPE>COLLECTION</TYPE>
+    <ID>TallyBridgePreviewCustomers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${escapeTallyPreviewXml(companyName)}</SVCURRENTCOMPANY>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="TallyBridgePreviewCustomers">
+            <TYPE>Ledger</TYPE>
+            <CHILDOF>$$GroupSundryDebtors</CHILDOF>
+            <BELONGSTO>Yes</BELONGSTO>
+            <FETCH>Name</FETCH>
+            <FETCH>Parent</FETCH>
+            <FETCH>Address.List</FETCH>
+            <FETCH>LedgerMobile</FETCH>
+            <FETCH>LedgerPhone</FETCH>
+            <FETCH>PhoneNumber</FETCH>
+            <FETCH>MobileNumber</FETCH>
+            <FETCH>ClosingBalance</FETCH>
+            <FETCH>PriceLevelApplicable</FETCH>
+            <FETCH>PriceLevel</FETCH>
+            <FETCH>PriceLevel.List</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+
+      const responseXml =
+        await requestTallyPreview(xml);
+
+      const ledgers = getTallyPreviewRows(
+        responseXml,
+        'LEDGER'
+      );
+
+      const rows = ledgers
+        .map(itemXml => {
+          const customerName = cleanTallyPreviewText(
+  getTallyPreviewName(itemXml, 'LEDGER')
+);
+
+          const parentGroup = cleanTallyPreviewText(
+  getTallyPreviewTag(itemXml, 'PARENT')
+);
+
+          const addressBlock = itemXml.match(
+            /<ADDRESS\.LIST\b[^>]*>([\s\S]*?)<\/ADDRESS\.LIST>/i
+          )?.[1] || '';
+
+          const addressParts = [
+            ...addressBlock.matchAll(
+              /<ADDRESS(?![\w.])[^>]*>([\s\S]*?)<\/ADDRESS>/gi
+            )
+          ]
+            .map(match =>
+              decodeTallyPreviewXml(
+                match[1].replace(/<[^>]+>/g, ' ').trim()
+              )
+            )
+            .filter(Boolean);
+
+          const rawPriceLevel = [
+            getTallyPreviewTag(
+              itemXml,
+              'PRICELEVELAPPLICABLE'
+            ),
+            getTallyPreviewTag(itemXml, 'PRICELEVEL'),
+            getTallyPreviewTag(itemXml, 'PRICELEVEL.LIST')
+          ]
+            .map(cleanTallyPreviewText)
+            .find(value =>
+              value &&
+              !/^(not applicable|not set|none|nil|default)$/i.test(value)
+            );
+
+          const rawPhone = [
+            getTallyPreviewTag(itemXml, 'LEDGERMOBILE'),
+            getTallyPreviewTag(itemXml, 'MOBILENUMBER'),
+            getTallyPreviewTag(itemXml, 'LEDGERPHONE'),
+            getTallyPreviewTag(itemXml, 'PHONENUMBER')
+          ]
+            .map(cleanTallyPreviewText)
+            .find(value =>
+              value &&
+              !/^(not applicable|not set|none|nil|default)$/i.test(value)
+            ) || '';
+
+          const rawBalance = getTallyPreviewTag(
+            itemXml,
+            'CLOSINGBALANCE'
+          );
+
+          const balanceMatch = String(rawBalance || '')
+            .replace(/,/g, '')
+            .match(/-?\d+(?:\.\d+)?/);
+
+          let balance = balanceMatch
+            ? Number(balanceMatch[0])
+            : 0;
+
+          if (/\bCR\b/i.test(rawBalance)) {
+            balance = -Math.abs(balance);
+          } else if (/\bDR\b/i.test(rawBalance)) {
+            balance = Math.abs(balance);
+          }
+
+          const usablePrice =
+            rawPriceLevel || fallbackPrice || 'Price';
+
+          const beat =
+  !parentGroup ||
+  /^sundry debtors$/i.test(parentGroup) ||
+  /^(not applicable|not set|none|nil|default|not defined|not available)$/i.test(parentGroup)
+    ? fallbackArea
+    : parentGroup;
+
+          return {
+            customer_name: customerName,
+            beat,
+            price: usablePrice,
+            mobile: rawPhone,
+            place: addressParts.join(', '),
+            balance
+          };
+        })
+        .filter(row => row.customer_name)
+        .slice(0, 10);
+
+      console.log(
+        `[PREVIEW] Returning ${rows.length} customer rows.`
+      );
+
+      return {
+        success: true,
+        rows,
+        shown: rows.length
+      };
+
+    } catch (error) {
+      console.error(
+        '[CUSTOMER PREVIEW ERROR]',
+        error.message
+      );
+
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+);
+
+
 // =================================
 // SAVE TALLY SETUP
 // =================================
@@ -1018,6 +1452,15 @@ ipcMain.handle(
 
       const gstEnabled =
         setupData.gstEnabled === true;
+      const defaultProductUnit =
+  String(setupData.defaultProductUnit || '')
+    .trim()
+    .replace(/[\r\n]/g, ' ');
+
+const defaultCustomerArea =
+  String(setupData.defaultCustomerArea || '')
+    .trim()
+    .replace(/[\r\n]/g, ' ');
 
       const syncCustomersToOrderFlow =
   setupData.syncCustomersToOrderFlow === true;
@@ -1399,6 +1842,8 @@ const salesVoucherType = salesVoucherTypes.includes(
 TALLY_HOST=${tallyHost}
 TALLY_PORT=${tallyPort}
 TALLY_COMPANY=${tallyCompany}
+DEFAULT_PRODUCT_UNIT=${defaultProductUnit}
+DEFAULT_CUSTOMER_AREA=${defaultCustomerArea}
 SYNC_CUSTOMERS_TO_ORDER_FLOW=${syncCustomersToOrderFlow}
 SYNC_PRODUCTS_TO_ORDER_FLOW=${syncProductsToOrderFlow}
 
@@ -1524,6 +1969,8 @@ SALES_VOUCHER_TYPE=${salesVoucherType}
 
       }
 
+      syncCustomersAfterSetup = syncCustomersToOrderFlow;
+
 
       // =================================
       // START BRIDGE
@@ -1604,6 +2051,43 @@ function requestProductSync() {
     }
   );
 }
+
+
+function requestCustomerSync() {
+  if (
+    !bridgeProcess ||
+    !bridgeProcess.stdin ||
+    !bridgeProcess.stdin.writable
+  ) {
+    console.error(
+      '[CUSTOMER SYNC] Bridge is not ready to receive the command.'
+    );
+    return;
+  }
+
+  if (customerSyncRunning) {
+    return;
+  }
+
+  customerSyncRunning = true;
+
+  bridgeProcess.stdin.write(
+    JSON.stringify({
+      command: 'sync-customers-once'
+    }) + '\n',
+    (error) => {
+      if (error) {
+        customerSyncRunning = false;
+
+        console.error(
+          '[CUSTOMER SYNC] Could not start import:',
+          error.message
+        );
+      }
+    }
+  );
+}
+
 // =================================
 // START TALLY BRIDGE
 // =================================
@@ -1774,18 +2258,95 @@ function startBridge() {
         line
       );
     }
-    if (
-  syncProductsAfterSetup &&
-  line.includes('REALTIME LISTENER IS READY')
-) {
-  syncProductsAfterSetup = false;
+    
+if (line.includes('REALTIME LISTENER IS READY')) {
+  if (syncCustomersAfterSetup) {
+    syncCustomersAfterSetup = false;
 
-  console.log(
-    '[BRIDGE] Running initial product sync after setup.'
-  );
+    console.log(
+      '[BRIDGE] Starting initial customer import.'
+    );
 
-  requestProductSync();
+    requestCustomerSync();
+
+  } else if (syncProductsAfterSetup) {
+    syncProductsAfterSetup = false;
+
+    console.log(
+      '[BRIDGE] Starting initial product sync.'
+    );
+
+    requestProductSync();
+  }
 }
+
+
+const customerPrefix = 'CUSTOMER_SYNC_RESULT:';
+
+if (line.startsWith(customerPrefix)) {
+  try {
+    const result = JSON.parse(
+      line.slice(customerPrefix.length)
+    );
+
+    customerSyncRunning = false;
+
+    if (result.success) {
+      console.log(
+        '[CUSTOMER SYNC] Initial customer import completed.',
+        `Inserted: ${result.inserted || 0}`
+      );
+
+      if (tray) {
+        tray.displayBalloon({
+          title: 'Tally Bridge',
+          content:
+            `Customer import completed. ` +
+            `Inserted: ${result.inserted || 0}.`
+        });
+      }
+
+    } else {
+      console.error(
+        '[CUSTOMER SYNC ERROR]',
+        result.error || 'Unknown customer import error'
+      );
+
+      if (tray) {
+        tray.displayBalloon({
+          title: 'Tally Bridge',
+          content:
+            'Customer import failed: ' +
+            String(result.error || 'Unknown error').slice(0, 150)
+        });
+      }
+    }
+
+    // If the initial product import was also selected,
+    // start it after the customer import has returned.
+    if (syncProductsAfterSetup) {
+      syncProductsAfterSetup = false;
+
+      console.log(
+        '[BRIDGE] Starting initial product sync.'
+      );
+
+      requestProductSync();
+    }
+
+  } catch (error) {
+    customerSyncRunning = false;
+
+    console.error(
+      '[BRIDGE] Could not read customer sync result:',
+      error.message
+    );
+  }
+
+  continue;
+}
+
+
     const prefix = 'PRODUCT_SYNC_RESULT:';
 
     if (!line.startsWith(prefix)) continue;

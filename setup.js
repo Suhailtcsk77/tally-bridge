@@ -9,6 +9,12 @@ const companyNameInput =
     'companyName'
   );
 
+const defaultProductUnitInput =
+  document.getElementById('defaultProductUnit');
+
+const defaultCustomerAreaInput =
+  document.getElementById('defaultCustomerArea');
+
 const syncCustomersToOrderFlowInput =
   document.getElementById('syncCustomersToOrderFlow');
 
@@ -447,6 +453,11 @@ const roundOffLedger =
   await window.tallyBridge.saveSetup({
 
     companyName,
+    defaultProductUnit:
+  defaultProductUnitInput.value.trim(),
+
+defaultCustomerArea:
+  defaultCustomerAreaInput.value.trim(),
     syncCustomersToOrderFlow:
   syncCustomersToOrderFlowInput.checked,
 
@@ -545,3 +556,153 @@ saveButton.addEventListener(
   saveSetup
 
 );
+
+
+const previewProductsButton =
+  document.getElementById('previewProductsButton');
+
+const previewCustomersButton =
+  document.getElementById('previewCustomersButton');
+
+const previewResults =
+  document.getElementById('previewResults');
+
+async function runTallyPreview(type) {
+  const companyName = companyNameInput.value.trim();
+
+  if (!companyName) {
+    previewResults.style.display = 'block';
+    previewResults.textContent =
+      'Please enter the Tally Company Name first.';
+    return;
+  }
+
+  previewProductsButton.disabled = true;
+  previewCustomersButton.disabled = true;
+
+  previewResults.style.display = 'block';
+  previewResults.textContent =
+    type === 'products'
+      ? 'Fetching product preview from Tally...'
+      : 'Fetching customer preview from Tally...';
+
+  try {
+    const previewData = {
+  companyName,
+
+  highestPriceLevel:
+    document.getElementById('highestPriceLevel').value.trim(),
+
+  defaultProductUnit:
+    defaultProductUnitInput.value.trim(),
+
+  defaultCustomerArea:
+    defaultCustomerAreaInput.value.trim()
+};
+
+    const result =
+      type === 'products'
+        ? await window.tallyBridge.previewProducts(previewData)
+        : await window.tallyBridge.previewCustomers(previewData);
+
+    if (!result || !result.success) {
+      throw new Error(
+        result?.error || 'Tally preview failed.'
+      );
+    }
+
+    previewResults.replaceChildren();
+
+    const heading = document.createElement('h3');
+    heading.textContent =
+      type === 'products'
+        ? 'Product Preview'
+        : 'Customer Preview';
+
+    previewResults.appendChild(heading);
+
+    const summary = document.createElement('p');
+    summary.className = 'preview-message';
+    summary.textContent =
+      `Showing ${result.rows.length} row(s), maximum 10. ` +
+      'Preview only — no data was uploaded to Order Flow.';
+
+    previewResults.appendChild(summary);
+
+    if (!result.rows.length) {
+      const emptyMessage = document.createElement('p');
+      emptyMessage.textContent =
+        'No matching records were returned by Tally.';
+      previewResults.appendChild(emptyMessage);
+      return;
+    }
+
+    const columns = Object.keys(result.rows[0]);
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+
+    for (const column of columns) {
+      const th = document.createElement('th');
+
+      th.textContent = column
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, letter => letter.toUpperCase());
+
+      headerRow.appendChild(th);
+    }
+
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    for (const row of result.rows) {
+      const tr = document.createElement('tr');
+
+      for (const column of columns) {
+        const td = document.createElement('td');
+        const value = row[column];
+
+        td.textContent =
+          value === null ||
+          value === undefined ||
+          value === ''
+            ? '—'
+            : String(value);
+
+        tr.appendChild(td);
+      }
+
+      tbody.appendChild(tr);
+    }
+
+    table.appendChild(tbody);
+    previewResults.appendChild(table);
+
+  } catch (error) {
+    console.error('[TALLY PREVIEW ERROR]', error);
+
+    previewResults.replaceChildren();
+
+    const errorMessage = document.createElement('p');
+    errorMessage.className = 'preview-message';
+    errorMessage.textContent =
+      `Preview failed: ${error.message}`;
+
+    previewResults.appendChild(errorMessage);
+
+  } finally {
+    previewProductsButton.disabled = false;
+    previewCustomersButton.disabled = false;
+  }
+}
+
+previewProductsButton.addEventListener('click', () => {
+  runTallyPreview('products');
+});
+
+previewCustomersButton.addEventListener('click', () => {
+  runTallyPreview('customers');
+});
+r

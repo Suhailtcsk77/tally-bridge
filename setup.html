@@ -481,6 +481,82 @@ textarea:focus {
 
     }
 
+    
+.preview-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.preview-actions button {
+  flex: 1;
+  background: #eaf2ff;
+  color: #2878d4;
+  border: 1px solid #cbdcf5;
+  font-weight: bold;
+}
+
+.preview-actions button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.preview-results {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  box-sizing: border-box;
+}
+
+.preview-results table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 13px;
+}
+
+.preview-results th,
+.preview-results td {
+  padding: 8px;
+  border: 1px solid #ddd;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.preview-results table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.preview-results th,
+.preview-results td {
+  padding: 8px;
+  border: 1px solid #ddd;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.preview-results th {
+  background: #f4f6f8;
+}
+
+.preview-results .preview-message {
+  font-size: 14px;
+  color: #555;
+}
+
+
   </style>
 
 </head>
@@ -519,6 +595,44 @@ textarea:focus {
 
 
     </div>
+
+  
+<!-- DEFAULT PRODUCT UNIT -->
+
+<div class="field-group">
+  <label for="defaultProductUnit">
+    Default Product Unit
+  </label>
+
+  <input
+    id="defaultProductUnit"
+    type="text"
+    placeholder="Example: Nos"
+  >
+
+  <p class="help-text">
+    Used when a product's unit is missing or is a Tally default value.
+  </p>
+</div>
+
+<!-- DEFAULT CUSTOMER AREA -->
+
+<div class="field-group">
+  <label for="defaultCustomerArea">
+    Default Customer Area
+  </label>
+
+  <input
+    id="defaultCustomerArea"
+    type="text"
+    placeholder="Example: Mannarkkad"
+  >
+
+  <p class="help-text">
+    Used when a customer's group or area is missing or is a Tally default value.
+  </p>
+</div>
+
 
   
 <!-- SALES LEDGERS -->
@@ -913,6 +1027,26 @@ textarea:focus {
   </label>
 </div>
 
+
+
+<!-- TALLY DATA PREVIEW BUTTONS -->
+
+<div class="preview-actions">
+  <button type="button" id="previewProductsButton">
+    Preview 10 Products
+  </button>
+
+  <button type="button" id="previewCustomersButton">
+    Preview 10 Customers
+  </button>
+</div>
+
+<div
+  id="previewResults"
+  class="preview-results"
+  aria-live="polite"
+  style="display: none;"
+></div>
 
     
 
