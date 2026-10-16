@@ -1019,6 +1019,12 @@ ipcMain.handle(
       const gstEnabled =
         setupData.gstEnabled === true;
 
+      const syncCustomersToOrderFlow =
+  setupData.syncCustomersToOrderFlow === true;
+
+const syncProductsToOrderFlow =
+  setupData.syncProductsToOrderFlow === true;
+
       const pricingMethod = [
   'standard',
   'opening',
@@ -1393,6 +1399,8 @@ const salesVoucherType = salesVoucherTypes.includes(
 TALLY_HOST=${tallyHost}
 TALLY_PORT=${tallyPort}
 TALLY_COMPANY=${tallyCompany}
+SYNC_CUSTOMERS_TO_ORDER_FLOW=${syncCustomersToOrderFlow}
+SYNC_PRODUCTS_TO_ORDER_FLOW=${syncProductsToOrderFlow}
 
 GST_ENABLED=${gstEnabled}
 
@@ -1521,7 +1529,7 @@ SALES_VOUCHER_TYPE=${salesVoucherType}
       // START BRIDGE
       // =================================
 
-      syncProductsAfterSetup = true;
+      syncProductsAfterSetup = syncProductsToOrderFlow;
       startBridge();
 
 

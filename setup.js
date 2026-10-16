@@ -9,6 +9,12 @@ const companyNameInput =
     'companyName'
   );
 
+const syncCustomersToOrderFlowInput =
+  document.getElementById('syncCustomersToOrderFlow');
+
+const syncProductsToOrderFlowInput =
+  document.getElementById('syncProductsToOrderFlow');
+
 const pricingMethodRadios =
   document.querySelectorAll(
     'input[name="pricingMethod"]'
@@ -441,6 +447,11 @@ const roundOffLedger =
   await window.tallyBridge.saveSetup({
 
     companyName,
+    syncCustomersToOrderFlow:
+  syncCustomersToOrderFlowInput.checked,
+
+syncProductsToOrderFlow:
+  syncProductsToOrderFlowInput.checked,
 
     pricingMethod:
   document.querySelector(

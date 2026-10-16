@@ -168,6 +168,8 @@ textarea {
 
     }
 
+    
+
 
     input:focus,
 select:focus,
@@ -186,6 +188,23 @@ textarea:focus {
         );
 
     }
+
+    
+.sync-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  font-weight: normal;
+  cursor: pointer;
+}
+
+.sync-option input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  flex-shrink: 0;
+}
+
 
 
     .ledger-row {
@@ -864,6 +883,36 @@ textarea:focus {
 
 
     </div>
+
+
+  
+<!-- ORDER FLOW INITIAL SYNC OPTIONS -->
+
+<div class="section">
+  <h3>Order Flow Initial Sync</h3>
+
+  <p class="help-text">
+    Select which data should be imported from Tally
+    when you save the setup for the first time.
+  </p>
+
+  <label class="sync-option">
+    <input
+      type="checkbox"
+      id="syncCustomersToOrderFlow"
+    >
+    Sync Customers Details to Order Flow
+  </label>
+
+  <label class="sync-option">
+    <input
+      type="checkbox"
+      id="syncProductsToOrderFlow"
+    >
+    Sync Product Details to Order Flow
+  </label>
+</div>
+
 
     
 
