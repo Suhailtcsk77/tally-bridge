@@ -1779,31 +1779,6 @@ const salesVoucherType = salesVoucherTypes.includes(
             ''
           )
 
-          .replace(
-            /^DEFAULT_PRODUCT_UNIT=.*$/gm,
-            ''
-          )
-
-          .replace(
-            /^DEFAULT_CUSTOMER_AREA=.*$/gm,
-            ''
-          )
-
-          .replace(
-            /^SYNC_CUSTOMERS_TO_ORDER_FLOW=.*$/gm,
-            ''
-          )
-
-          .replace(
-            /^SYNC_PRODUCTS_TO_ORDER_FLOW=.*$/gm,
-            ''
-          )
-
-          .replace(
-            /^GST_ENABLED=.*$/gm,
-            ''
-          )
-
           .replace(/^PRICING_METHOD=.*$/gm, '')
 .replace(/^PRICE_LEVEL_HIGHEST=.*$/gm, '')
 .replace(/^PRICE_LEVEL_MEDIUM=.*$/gm, '')
