@@ -903,9 +903,47 @@ async function postToTally(
 
 async function postToTally(xml, timeout = 30000) {
   try {
+        const configuredCompany =
+      String(process.env.TALLY_COMPANY || '').trim();
+
+    if (!configuredCompany) {
+      throw new Error(
+        'TALLY_COMPANY is not configured. Save the Tally company name in Setup.'
+      );
+    }
+
+    const companyTag =
+      `<SVCURRENTCOMPANY>${escapeXml(configuredCompany)}</SVCURRENTCOMPANY>`;
+
+    let requestXml = String(xml);
+
+    const companyTagPattern =
+      /<SVCURRENTCOMPANY\b[^>]*>[\s\S]*?<\/SVCURRENTCOMPANY>/i;
+
+    if (companyTagPattern.test(requestXml)) {
+      requestXml = requestXml.replace(
+        companyTagPattern,
+        companyTag
+      );
+    } else if (/<STATICVARIABLES\b[^>]*>/i.test(requestXml)) {
+      requestXml = requestXml.replace(
+        /<STATICVARIABLES\b[^>]*>/i,
+        match => `${match}${companyTag}`
+      );
+    } else if (/<DESC\b[^>]*>/i.test(requestXml)) {
+      requestXml = requestXml.replace(
+        /<DESC\b[^>]*>/i,
+        match =>
+          `${match}<STATICVARIABLES>${companyTag}</STATICVARIABLES>`
+      );
+    } else {
+      throw new Error(
+        'Cannot select the configured Tally company: request XML has no DESC element.'
+      );
+    }
     const response = await axios.post(
       tallyUrl,
-      xml,
+      requestXml,
       {
         headers: {
           'Content-Type': 'text/xml'
