@@ -458,6 +458,9 @@ const CHECK_INTERVAL =
 let invoiceProcessing =
   false;
 
+let invoiceProcessingRequested =
+  false;
+
 
 // =================================
 // CACHE FILES
@@ -8041,6 +8044,17 @@ async function markInvoiceFailed(
 
     async function processPendingInvoice() {
 
+            if (invoiceProcessing) {
+        invoiceProcessingRequested = true;
+        console.log(
+          '[BRIDGE] Invoice already processing; queueing a follow-up check.'
+        );
+        return;
+      }
+
+      invoiceProcessing = true;
+      invoiceProcessingRequested = false;
+
         let currentRequestId = null;
 
         let currentOrderId = null;
@@ -8386,6 +8400,21 @@ currentOrderId =
 
         };
 
+            } finally {
+        invoiceProcessing = false;
+
+        if (invoiceProcessingRequested) {
+          invoiceProcessingRequested = false;
+
+          setImmediate(() => {
+            processPendingInvoice().catch(error => {
+              console.error(
+                '[BRIDGE] Queued invoice check failed:',
+                error.message || error
+              );
+            });
+          });
+        }
       }
 
     } // closes processPendingInvoice
