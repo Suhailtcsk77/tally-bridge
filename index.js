@@ -2816,11 +2816,11 @@ async function fetchCustomersFromTally() {
 
     const amount = Number(match[0]);
 
-    if (/\bCR\b/i.test(raw)) {
+    if (/\bDR\b/i.test(raw)) {
   return Math.abs(amount);
 }
 
-if (/\bDR\b/i.test(raw)) {
+if (/\bCR\b/i.test(raw)) {
   return -Math.abs(amount);
 }
 

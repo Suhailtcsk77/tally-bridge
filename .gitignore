@@ -1,9 +1,31 @@
+# Dependencies
 node_modules/
+
+# Environment files and secrets
 .env
 .env.*
 .envBackup
-*.logrelease/
-dist/
-# Electron build outputs
+
+# Logs
+*.log
+logs/
+
+# Build output
 release/
+dist/
 win-unpacked/
+
+# Local business data and caches
+balances_cache.json
+stocks_cache.json
+last-balances.json
+last-stocks.json
+balance-cache.json
+stock-cache.json
+sales_ledger_cache.json
+sales-ledger-cache.json
+customer_sync_state.json
+
+# Backup source files
+index - Copy.js
+main - Copy.js

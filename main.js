@@ -1356,9 +1356,9 @@ ipcMain.handle(
             ? Number(balanceMatch[0])
             : 0;
 
-          if (/\bCR\b/i.test(rawBalance)) {
+          if (/\bDR\b/i.test(rawBalance)) {
   balance = Math.abs(balance);
-} else if (/\bDR\b/i.test(rawBalance)) {
+} else if (/\bCR\b/i.test(rawBalance)) {
   balance = -Math.abs(balance);
 }
 
